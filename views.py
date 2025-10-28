@@ -1,20 +1,15 @@
-from services import country_data, exchange_rate_data, match_countries_with_exchange_rates, calculate_estimated_gdp, generate_country_summary_image
+from services import country_data, exchange_rate_data, calculate_estimated_gdp, generate_country_summary_image
 from models import Countries, SessionDep
 from fastapi import HTTPException, status
 from main import app
 from sqlmodel import select, func
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi.responses import FileResponse
-from PIL import Image, ImageDraw, ImageFont
 import os
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 IMAGE_PATH = os.path.join(BASE_DIR, "cache", "summary.png")
 
-@app.on_event("startup")
-def on_startup():
-    from models import create_db_and_tables
-    create_db_and_tables()
 
 @app.post("/countries/refresh")
 def fetch_country_data(session: SessionDep):
@@ -88,7 +83,7 @@ def fetch_country_data(session: SessionDep):
                 existing.exchange_rate = exchange_rate
                 existing.estimated_gdp = estimated_gdp
                 existing.flag_url = flag_url
-                existing.last_referenced_at = datetime.utcnow()
+                existing.last_referenced_at = datetime.now(timezone.utc)
             else:
                 new_country = Countries(
                     name=name,
@@ -148,7 +143,7 @@ def get_countries(session: SessionDep, skip: int = 0, limit: int = 10,
             "name_desc": Countries.name.desc(),
         }
         sort_order = sort_mapping.get(sort)
-        if not sort_order:
+        if sort_order is None:
             raise HTTPException(status_code=400, detail={"error": "Invalid sort parameter"})
         query = query.order_by(sort_order)
 

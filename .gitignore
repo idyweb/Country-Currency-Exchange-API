@@ -3,3 +3,4 @@ stage-2/__pycache__/
 stage-2/.venv/
 *.pyc
 __pycache__/
+.pytest_cache/

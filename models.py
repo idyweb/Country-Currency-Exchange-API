@@ -1,5 +1,5 @@
 from typing import Annotated
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import  Depends, FastAPI, HTTPException, Query
 from sqlmodel import Field, SQLModel, create_engine, Session, select
@@ -15,7 +15,7 @@ class Countries(SQLModel, table=True):
     exchange_rate: float | None = Field(default=None, nullable=True)
     estimated_gdp: float | None = Field(default=None, nullable=True)
     flag_url: str | None = None
-    last_referenced_at: datetime = Field(default_factory=datetime.utcnow)
+    last_referenced_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 sqlite_file_name = "countries.db"

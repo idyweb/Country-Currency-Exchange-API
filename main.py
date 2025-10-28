@@ -1,9 +1,14 @@
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
-from datetime import datetime, timezone
+from contextlib import asynccontextmanager
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    from models import create_db_and_tables
+    create_db_and_tables()
+    yield
+
+app = FastAPI(lifespan=lifespan, title="Country Data Service", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
