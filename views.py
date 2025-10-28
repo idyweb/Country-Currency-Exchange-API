@@ -1,7 +1,8 @@
 from services import country_data, exchange_rate_data, match_countries_with_exchange_rates, calculate_estimated_gdp
 from models import Countries, SessionDep
+from fastapi import HTTPException, status
 from main import app
-from sqlmodel import select
+from sqlmodel import select, func
 from datetime import datetime
 
 @app.on_event("startup")
@@ -11,65 +12,142 @@ def on_startup():
 
 @app.post("/countries/refresh")
 def fetch_country_data(session: SessionDep):
-    countries = country_data("https://restcountries.com/v2/all?fields=name,capital,region,population,flag,currencies")
-    exchange_rates = exchange_rate_data("https://open.er-api.com/v6/latest/USD")
+    try:
 
-    country_obj = []
+        countries = country_data("https://restcountries.com/v2/all?fields=name,capital,region,population,flag,currencies")
+        exchange_rates = exchange_rate_data("https://open.er-api.com/v6/latest/USD")
 
-    for country in countries:
-        name = country.get("name")
-        population = country.get("population")
-        capital = country.get("capital")
-        region = country.get("region")
-        flag_url = country.get("flag")
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error": "External data source unavailable",
+                "details": str(e)
+            }
+        )
 
-        
-        currencies = country.get("currencies") or []
-        currency_code = currencies[0].get("code") if currencies else None
+    if not countries or not exchange_rates:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"error": "External data source unavailable", "details": "Could not fetch data from API"}
+        )
 
-        
-        exchange_rate = exchange_rates.get(currency_code) if currency_code else None
+    try:
 
-        
-        if currency_code is None:
-            estimated_gdp = 0  
-        elif exchange_rate is None:
-            estimated_gdp = None  
-        else:
-            estimated_gdp = calculate_estimated_gdp({
-                "population": population,
-                "exchange_rate": exchange_rate
-            })
+        country_obj = []
 
-        
-        existing = session.exec(select(Countries).where(Countries.name.ilike(name))).first()
+        for country in countries:
+            name = country.get("name")
+            population = country.get("population")
+            capital = country.get("capital")
+            region = country.get("region")
+            flag_url = country.get("flag")
 
-        if existing:
-            existing.capital = capital
-            existing.region = region
-            existing.population = population
-            existing.currency_code = currency_code
-            existing.exchange_rate = exchange_rate
-            existing.estimated_gdp = estimated_gdp
-            existing.flag_url = flag_url
-            existing.last_referenced_at = datetime.utcnow()
-        else:
-            new_country = Countries(
-                name=name,
-                capital=capital,
-                region=region,
-                population=population,
-                currency_code=currency_code,
-                exchange_rate=exchange_rate,
-                estimated_gdp=estimated_gdp,
-                flag_url=flag_url,
-            )
-            country_obj.append(new_country)
+            # Extract currency data
+            currencies = country.get("currencies") or []
+            currency_code = currencies[0].get("code") if currencies else None
 
-    if country_obj:
-        session.add_all(country_obj)
+            
+            missing_fields = {}
+            if not name:
+                missing_fields["name"] = "is required"
+            # if not population:
+            #     missing_fields["population"] = "is required"
+            # if not currency_code:
+            #     missing_fields["currency_code"] = "is required"
+
+            # if missing_fields:
+            #     raise HTTPException(
+            #         status_code=status.HTTP_400_BAD_REQUEST,
+            #         detail={"error": "Validation failed", "details": missing_fields}
+            #     )
+
+            if not currency_code:
+                exchange_rate = None
+                estimated_gdp = 0
+            else:
+                exchange_rate = exchange_rates.get(currency_code)
+                estimated_gdp = (
+                    calculate_estimated_gdp({"population": population, "exchange_rate": exchange_rate})
+                    if exchange_rate else None
+                )
+
+            existing = session.exec(select(Countries).where(Countries.name.ilike(name))).first()
+
+            if existing:
+                existing.capital = capital
+                existing.region = region
+                existing.population = population
+                existing.currency_code = currency_code
+                existing.exchange_rate = exchange_rate
+                existing.estimated_gdp = estimated_gdp
+                existing.flag_url = flag_url
+                existing.last_referenced_at = datetime.utcnow()
+            else:
+                new_country = Countries(
+                    name=name,
+                    capital=capital,
+                    region=region,
+                    population=population,
+                    currency_code=currency_code,
+                    exchange_rate=exchange_rate,
+                    estimated_gdp=estimated_gdp,
+                    flag_url=flag_url,
+                )
+                country_obj.append(new_country)
+
+        if country_obj:
+            session.add_all(country_obj)
+
+        session.commit()
+
+        return {"message": f"Saved/updated {len(country_obj)} countries successfully"}
+
+    except HTTPException as e:
+        session.rollback()
+        raise e
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "Internal server error", "details": str(e)}
+        )
+
+
+@app.get("/countries")
+def get_countries(session: SessionDep, skip: int = 0, limit: int = 10,
+                  name: str | None = None,
+                  region: str | None = None,
+                  currency: str | None = None,
+                  sort: str | None = None):
     
-    session.commit()
+    query = select(Countries)
 
-    return {"message": f"Saved/updated {len(country_obj)} countries successfully"}
+    if name:
+        query = query.where(Countries.name.ilike(f"%{name}%"))
+    if region:
+        query = query.where(Countries.region.ilike(f"%{region}%"))
+    if currency:
+        query = query.where(Countries.currency_code.ilike(f"%{currency}%"))
+
+    if sort:
+        sort_mapping = {
+            "gdp_asc": Countries.estimated_gdp.asc(),
+            "gdp_desc": Countries.estimated_gdp.desc(),
+            "population_asc": Countries.population.asc(),
+            "population_desc": Countries.population.desc(),
+            "name_asc": Countries.name.asc(),
+            "name_desc": Countries.name.desc(),
+        }
+        sort_order = sort_mapping.get(sort)
+        if not sort_order:
+            raise HTTPException(status_code=400, detail={"error": "Invalid sort parameter"})
+        query = query.order_by(sort_order)
+
+    total_count = session.exec(select(func.count()).select_from(Countries)).one()
+    countries = session.exec(query.offset(skip).limit(limit)).all()
+
+    return {
+        "data": countries,
+        "total_count": total_count}
 
