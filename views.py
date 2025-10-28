@@ -151,3 +151,17 @@ def get_countries(session: SessionDep, skip: int = 0, limit: int = 10,
         "data": countries,
         "total_count": total_count}
 
+
+
+@app.get("/countries/{name}")
+def get_country_by_name(name: str, session: SessionDep):
+    statement = select(Countries).where(Countries.name.ilike(name))
+    result = session.exec(statement).first()
+    
+    if not result:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "Country not found", "country": name}
+        )
+    
+    return result
