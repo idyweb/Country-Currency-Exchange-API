@@ -36,6 +36,7 @@ def fetch_country_data(session: SessionDep):
     try:
 
         country_obj = []
+        updated_count = 0
 
         for country in countries:
             name = country.get("name")
@@ -70,7 +71,7 @@ def fetch_country_data(session: SessionDep):
                 exchange_rate = exchange_rates.get(currency_code)
                 estimated_gdp = (
                     calculate_estimated_gdp({"population": population, "exchange_rate": exchange_rate})
-                    if exchange_rate else None
+                    if exchange_rate else 0
                 )
 
             existing = session.exec(select(Countries).where(Countries.name.ilike(name))).first()
@@ -84,6 +85,7 @@ def fetch_country_data(session: SessionDep):
                 existing.estimated_gdp = estimated_gdp
                 existing.flag_url = flag_url
                 existing.last_refreshed_at = datetime.now(timezone.utc)
+                updated_count += 1
             else:
                 new_country = Countries(
                     name=name,
@@ -104,7 +106,9 @@ def fetch_country_data(session: SessionDep):
 
         generate_country_summary_image(session)
 
-        return {"message": f"Saved/updated {len(country_obj)} countries successfully and summary image generated"}
+        total_processed = len(country_obj) + updated_count
+
+        return {"message": f"Saved/updated {total_processed} countries successfully and summary image generated"}
 
     except HTTPException as e:
         session.rollback()
@@ -147,19 +151,26 @@ def get_countries(session: SessionDep, skip: int = 0, limit: int = 10,
             raise HTTPException(status_code=400, detail={"error": "Invalid sort parameter"})
         query = query.order_by(sort_order)
 
-    total_count = session.exec(select(func.count()).select_from(Countries)).one()
+    filtered_query = query
     countries = session.exec(query.offset(skip).limit(limit)).all()
+    
+    # Count with filters applied
+    total_count = len(session.exec(filtered_query).all())
 
     return {
         "data": countries,
-        "total_count": total_count}
+        "total_count": total_count
+    }
 
 
 @app.get("/countries/image")
 def get_country_summary_image():
     if os.path.exists(IMAGE_PATH):
         return FileResponse(IMAGE_PATH, media_type="image/png")
-    return {"error": "Summary image not found"}
+    raise HTTPException(
+        status_code=404,
+        detail={"error": "Summary image not found"}
+    )
 
 
 @app.get("/countries/{name}")
@@ -170,7 +181,7 @@ def get_country_by_name(name: str, session: SessionDep):
     if not result:
         raise HTTPException(
             status_code=404,
-            detail={"error": "Country not found", "country": name}
+            detail={"error": f"Country '{name}' not found"}
         )
     
     return result
@@ -184,7 +195,7 @@ def delete_country(name: str, session: SessionDep):
     if not country:
         raise HTTPException(
             status_code=404,
-            detail={"error": "Country not found", "country": name}
+            detail={"error": f"Country '{name}' not found"}
         )
     session.delete(country)
     session.commit()
@@ -200,5 +211,5 @@ def total_countries_and_last_refresh(session: SessionDep):
 
     return {
         "total_countries": total_countries,
-        "last_refresh": last_refresh
+        "last_refreshed_at": last_refresh
     }
