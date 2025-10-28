@@ -155,8 +155,8 @@ def get_countries(session: SessionDep, skip: int = 0, limit: int = 10,
 
 @app.get("/countries/{name}")
 def get_country_by_name(name: str, session: SessionDep):
-    statement = select(Countries).where(Countries.name.ilike(name))
-    result = session.exec(statement).first()
+    query = select(Countries).where(Countries.name.ilike(name))
+    result = session.exec(query).first()
     
     if not result:
         raise HTTPException(
@@ -165,3 +165,19 @@ def get_country_by_name(name: str, session: SessionDep):
         )
     
     return result
+
+
+@app.delete("/countries/{name}")
+def delete_country(name: str, session: SessionDep):
+    query = select(Countries).where(Countries.name.ilike(name))
+    country = session.exec(query).first()
+
+    if not country:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "Country not found", "country": name}
+        )
+    session.delete(country)
+    session.commit()
+    return {"message": f"Country '{name}' deleted successfully"}
+
