@@ -1,9 +1,15 @@
-from services import country_data, exchange_rate_data, match_countries_with_exchange_rates, calculate_estimated_gdp
+from services import country_data, exchange_rate_data, match_countries_with_exchange_rates, calculate_estimated_gdp, generate_country_summary_image
 from models import Countries, SessionDep
 from fastapi import HTTPException, status
 from main import app
 from sqlmodel import select, func
 from datetime import datetime
+from fastapi.responses import FileResponse
+from PIL import Image, ImageDraw, ImageFont
+import os
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+IMAGE_PATH = os.path.join(BASE_DIR, "cache", "summary.png")
 
 @app.on_event("startup")
 def on_startup():
@@ -101,7 +107,9 @@ def fetch_country_data(session: SessionDep):
 
         session.commit()
 
-        return {"message": f"Saved/updated {len(country_obj)} countries successfully"}
+        generate_country_summary_image(session)
+
+        return {"message": f"Saved/updated {len(country_obj)} countries successfully and summary image generated"}
 
     except HTTPException as e:
         session.rollback()
@@ -151,6 +159,12 @@ def get_countries(session: SessionDep, skip: int = 0, limit: int = 10,
         "data": countries,
         "total_count": total_count}
 
+
+@app.get("/countries/image")
+def get_country_summary_image():
+    if os.path.exists(IMAGE_PATH):
+        return FileResponse(IMAGE_PATH, media_type="image/png")
+    return {"error": "Summary image not found"}
 
 
 @app.get("/countries/{name}")
