@@ -181,3 +181,15 @@ def delete_country(name: str, session: SessionDep):
     session.commit()
     return {"message": f"Country '{name}' deleted successfully"}
 
+
+@app.get("/status")
+def total_countries_and_last_refresh(session: SessionDep):
+    total_countries = session.exec(select(func.count()).select_from(Countries)).one()
+    last_refresh = session.exec(
+        select(func.max(Countries.last_referenced_at))
+    ).one()
+
+    return {
+        "total_countries": total_countries,
+        "last_refresh": last_refresh
+    }
