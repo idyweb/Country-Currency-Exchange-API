@@ -48,7 +48,7 @@ def generate_country_summary_image(session: SessionDep):
         select(Countries).order_by(Countries.estimated_gdp.desc()).limit(5)
     ).all()
     last_refresh_timestamp = session.exec(
-        select(func.max(Countries.last_referenced_at))
+        select(func.max(Countries.last_refreshed_at))
     ).one()
 
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))

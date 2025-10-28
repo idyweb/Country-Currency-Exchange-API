@@ -83,7 +83,7 @@ def fetch_country_data(session: SessionDep):
                 existing.exchange_rate = exchange_rate
                 existing.estimated_gdp = estimated_gdp
                 existing.flag_url = flag_url
-                existing.last_referenced_at = datetime.now(timezone.utc)
+                existing.last_refreshed_at = datetime.now(timezone.utc)
             else:
                 new_country = Countries(
                     name=name,
@@ -195,7 +195,7 @@ def delete_country(name: str, session: SessionDep):
 def total_countries_and_last_refresh(session: SessionDep):
     total_countries = session.exec(select(func.count()).select_from(Countries)).one()
     last_refresh = session.exec(
-        select(func.max(Countries.last_referenced_at))
+        select(func.max(Countries.last_refreshed_at))
     ).one()
 
     return {

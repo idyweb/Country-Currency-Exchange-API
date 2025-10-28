@@ -15,7 +15,7 @@ class Countries(SQLModel, table=True):
     exchange_rate: float | None = Field(default=None, nullable=True)
     estimated_gdp: float | None = Field(default=None, nullable=True)
     flag_url: str | None = None
-    last_referenced_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    last_refreshed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 sqlite_file_name = "countries.db"
