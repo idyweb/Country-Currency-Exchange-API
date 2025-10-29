@@ -1,4 +1,4 @@
-from services import country_data, exchange_rate_data, calculate_estimated_gdp, generate_country_summary_image
+from services import country_data, exchange_rate_data, generate_country_summary_image
 from models import Countries, SessionDep
 from fastapi import HTTPException, status
 from main import app
@@ -6,6 +6,7 @@ from sqlmodel import select, func
 from datetime import datetime, timezone
 from fastapi.responses import FileResponse
 import os
+import random
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 IMAGE_PATH = os.path.join(BASE_DIR, "cache", "summary.png")
@@ -14,10 +15,8 @@ IMAGE_PATH = os.path.join(BASE_DIR, "cache", "summary.png")
 @app.post("/countries/refresh")
 def fetch_country_data(session: SessionDep):
     try:
-
         countries = country_data("https://restcountries.com/v2/all?fields=name,capital,region,population,flag,currencies")
         exchange_rates = exchange_rate_data("https://open.er-api.com/v6/latest/USD")
-
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -34,49 +33,51 @@ def fetch_country_data(session: SessionDep):
         )
 
     try:
-
-        country_obj = []
+        new_countries = []
         updated_count = 0
 
         for country in countries:
             name = country.get("name")
-            population = country.get("population")
+            if not name:
+                continue
+                
+            population = country.get("population", 0)
             capital = country.get("capital")
             region = country.get("region")
             flag_url = country.get("flag")
-
-            # Extract currency data
             currencies = country.get("currencies") or []
-            currency_code = currencies[0].get("code") if currencies else None
-
             
-            missing_fields = {}
-            if not name:
-                missing_fields["name"] = "is required"
-            # if not population:
-            #     missing_fields["population"] = "is required"
-            # if not currency_code:
-            #     missing_fields["currency_code"] = "is required"
-
-            # if missing_fields:
-            #     raise HTTPException(
-            #         status_code=status.HTTP_400_BAD_REQUEST,
-            #         detail={"error": "Validation failed", "details": missing_fields}
-            #     )
-
-            if not currency_code:
+            
+            if not currencies:
+                
+                currency_code = None
                 exchange_rate = None
-                estimated_gdp = 0
+                estimated_gdp = 0.0 
             else:
-                exchange_rate = exchange_rates.get(currency_code)
-                estimated_gdp = (
-                    calculate_estimated_gdp({"population": population, "exchange_rate": exchange_rate})
-                    if exchange_rate else 0
-                )
+                currency_code = currencies[0].get("code") if currencies[0] else None
+                
+                if currency_code:
+                    exchange_rate = exchange_rates.get(currency_code)
+                    
+                    # Calculate GDP
+                    if exchange_rate and population:
+                        gdp_per_capita = random.uniform(1000, 2000)
+                        estimated_gdp = round((population * gdp_per_capita) / exchange_rate, 2)
+                    else:
+                    
+                        estimated_gdp = None
+                else:
+                
+                    exchange_rate = None
+                    estimated_gdp = 0.0
 
-            existing = session.exec(select(Countries).where(Countries.name.ilike(name))).first()
+            # Check if country exists
+            existing = session.exec(
+                select(Countries).where(Countries.name.ilike(name))
+            ).first()
 
             if existing:
+                # Update existing country
                 existing.capital = capital
                 existing.region = region
                 existing.population = population
@@ -85,8 +86,10 @@ def fetch_country_data(session: SessionDep):
                 existing.estimated_gdp = estimated_gdp
                 existing.flag_url = flag_url
                 existing.last_refreshed_at = datetime.now(timezone.utc)
+                session.add(existing)
                 updated_count += 1
             else:
+                # Create new country
                 new_country = Countries(
                     name=name,
                     capital=capital,
@@ -96,19 +99,23 @@ def fetch_country_data(session: SessionDep):
                     exchange_rate=exchange_rate,
                     estimated_gdp=estimated_gdp,
                     flag_url=flag_url,
+                    last_refreshed_at=datetime.now(timezone.utc)
                 )
-                country_obj.append(new_country)
+                new_countries.append(new_country)
 
-        if country_obj:
-            session.add_all(country_obj)
+        if new_countries:
+            session.add_all(new_countries)
 
         session.commit()
 
-        generate_country_summary_image(session)
+        # summary image
+        try:
+            generate_country_summary_image(session)
+        except Exception as img_error:
+            print(f"Image generation failed: {img_error}")
 
-        total_processed = len(country_obj) + updated_count
-
-        return {"message": f"Saved/updated {total_processed} countries successfully and summary image generated"}
+        total_processed = len(new_countries) + updated_count
+        return {"message": f"Saved/updated {total_processed} countries successfully"}
 
     except HTTPException as e:
         session.rollback()
@@ -122,14 +129,19 @@ def fetch_country_data(session: SessionDep):
 
 
 @app.get("/countries")
-def get_countries(session: SessionDep, skip: int = 0, limit: int = 10,
-                  name: str | None = None,
-                  region: str | None = None,
-                  currency: str | None = None,
-                  sort: str | None = None):
+def get_countries(
+    session: SessionDep, 
+    skip: int = 0, 
+    limit: int = 10,
+    name: str | None = None,
+    region: str | None = None,
+    currency: str | None = None,
+    sort: str | None = None
+):
     
     query = select(Countries)
 
+    # filters
     if name:
         query = query.where(Countries.name.ilike(f"%{name}%"))
     if region:
@@ -137,6 +149,7 @@ def get_countries(session: SessionDep, skip: int = 0, limit: int = 10,
     if currency:
         query = query.where(Countries.currency_code.ilike(f"%{currency}%"))
 
+    # sorting
     if sort:
         sort_mapping = {
             "gdp_asc": Countries.estimated_gdp.asc(),
@@ -148,40 +161,38 @@ def get_countries(session: SessionDep, skip: int = 0, limit: int = 10,
         }
         sort_order = sort_mapping.get(sort)
         if sort_order is None:
-            raise HTTPException(status_code=400, detail={"error": "Invalid sort parameter"})
+            raise HTTPException(
+                status_code=400, 
+                detail={"error": "Invalid sort parameter"}
+            )
         query = query.order_by(sort_order)
 
-    filtered_query = query
+    # Get paginated results
     countries = session.exec(query.offset(skip).limit(limit)).all()
-    
-    # Count with filters applied
-    total_count = len(session.exec(filtered_query).all())
 
-    return {
-        "data": countries,
-        "total_count": total_count
-    }
+    return countries
 
 
 @app.get("/countries/image")
 def get_country_summary_image():
-    if os.path.exists(IMAGE_PATH):
-        return FileResponse(IMAGE_PATH, media_type="image/png")
-    raise HTTPException(
-        status_code=404,
-        detail={"error": "Summary image not found"}
-    )
+    if not os.path.exists(IMAGE_PATH):
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "Summary image not found"}
+        )
+    return FileResponse(IMAGE_PATH, media_type="image/png")
 
 
 @app.get("/countries/{name}")
 def get_country_by_name(name: str, session: SessionDep):
+    
     query = select(Countries).where(Countries.name.ilike(name))
     result = session.exec(query).first()
     
     if not result:
         raise HTTPException(
             status_code=404,
-            detail={"error": f"Country '{name}' not found"}
+            detail={"error": "Country not found"}
         )
     
     return result
@@ -195,7 +206,7 @@ def delete_country(name: str, session: SessionDep):
     if not country:
         raise HTTPException(
             status_code=404,
-            detail={"error": f"Country '{name}' not found"}
+            detail={"error": "Country not found"}
         )
     session.delete(country)
     session.commit()
@@ -204,7 +215,10 @@ def delete_country(name: str, session: SessionDep):
 
 @app.get("/status")
 def total_countries_and_last_refresh(session: SessionDep):
-    total_countries = session.exec(select(func.count()).select_from(Countries)).one()
+    total_countries = session.exec(
+        select(func.count()).select_from(Countries)
+    ).one()
+    
     last_refresh = session.exec(
         select(func.max(Countries.last_refreshed_at))
     ).one()

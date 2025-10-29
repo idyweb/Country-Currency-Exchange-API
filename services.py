@@ -78,9 +78,3 @@ def generate_country_summary_image(session: SessionDep):
 
     image.save(image_path)
     print(f"✅ Image saved at {image_path}")
-
-countries = country_data("https://restcountries.com/v2/all?fields=name,capital,region,population,flag,currencies")
-# print(countries)
-exchange_rates = exchange_rate_data("https://open.er-api.com/v6/latest/USD")
-matched_countries = match_countries_with_exchange_rates(countries, exchange_rates)
-# print(matched_countries)
